@@ -1,0 +1,7 @@
+﻿<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Reportador</string>
+    <string name="title_activity_main">Reportador</string>
+    <string name="package_name">com.reportador.app</string>
+    <string name="custom_url_scheme">com.reportador.app</string>
+</resources>
