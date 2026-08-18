@@ -5,10 +5,7 @@ const DISCOVERY_URLS = [
   'https://cdn.jsdelivr.net/gh/T-Duva/reportador@master/server.json',
   'https://raw.githubusercontent.com/T-Duva/reportador/main/server.json',
 ]
-const FALLBACKS = [
-  'https://gwzv38-ip-181-117-8-15.tunnelmole.net',
-  'http://192.168.1.27:8789',
-]
+const FALLBACKS = ['https://gwzv38-ip-181-117-8-15.tunnelmole.net']
 
 let cached: string | null = null
 

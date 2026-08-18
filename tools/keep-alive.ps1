@@ -53,7 +53,7 @@ function Set-PublishedUrl([string]$url) {
       $txt2 = [regex]::Replace(
         $txt,
         "const FALLBACKS = \[[\s\S]*?\]",
-        "const FALLBACKS = [`r`n  '$url',`r`n  'http://192.168.1.27:8789',`r`n]"
+        "const FALLBACKS = [`r`n  '$url',`r`n]"
       )
       if ($txt2 -ne $txt) { Set-Content -Path $serverTs -Value $txt2 -Encoding UTF8 }
     } catch {}

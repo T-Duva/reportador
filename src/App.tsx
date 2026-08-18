@@ -239,7 +239,7 @@ export default function App() {
             hay v{remoteVersion} (estás en v{APP_VERSION})
           </span>
           <button type="button" onClick={() => void applyAppUpdate()}>
-            Actualizar
+            Instalar APK
           </button>
         </div>
       ) : null}

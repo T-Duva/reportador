@@ -1,5 +1,5 @@
 import { Capacitor } from '@capacitor/core'
-import { resolveServerOrigin } from './lib/server'
+import { APK_DOWNLOAD } from './lib/apkUrl'
 
 export async function applyAppUpdate(): Promise<void> {
   try {
@@ -15,24 +15,11 @@ export async function applyAppUpdate(): Promise<void> {
     /* seguir */
   }
 
+  // Nunca saltar a una página web. En el celular se baja el APK nuevo.
   if (Capacitor.isNativePlatform()) {
-    try {
-      const origin = await resolveServerOrigin()
-      window.location.replace(`${origin.replace(/\/$/, '')}/?fromApp=1&_v=${Date.now()}`)
-      return
-    } catch {
-      /* fallback */
-    }
-    const url = new URL(location.href)
-    url.searchParams.set('_v', String(Date.now()))
-    window.location.replace(url.toString())
+    window.open(APK_DOWNLOAD, '_system')
     return
   }
 
-  try {
-    const origin = await resolveServerOrigin()
-    window.location.replace(`${origin.replace(/\/$/, '')}/?_v=${Date.now()}`)
-  } catch {
-    location.reload()
-  }
+  location.reload()
 }
