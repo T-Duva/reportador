@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { applyAppUpdate } from './nativeBoot'
+import { needsAppUpdate } from './lib/update'
 import { useApp } from './state/store'
 import { APP_NAME, APP_VERSION } from './version'
 import type { WatcherStatus } from './types'
+import { AnalysisChat } from './components/AnalysisChat'
+import { ComparisonCard } from './components/ComparisonCard'
 
 const LAMP: Record<WatcherStatus, { cls: string; text: string }> = {
   online: { cls: 'on', text: 'escuchando' },
@@ -11,28 +14,29 @@ const LAMP: Record<WatcherStatus, { cls: string; text: string }> = {
   off: { cls: 'off', text: 'apagado' },
 }
 
-function isNewer(remote: string, local: string): boolean {
-  const parse = (v: string) => v.replace(/^v/i, '').split('.').map((x) => Number.parseInt(x, 10) || 0)
-  const a = parse(remote)
-  const b = parse(local)
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const x = a[i] || 0
-    const y = b[i] || 0
-    if (x > y) return true
-    if (x < y) return false
-  }
-  return false
-}
+const NAV = [
+  { id: 'general' as const, label: 'General' },
+  { id: 'pre' as const, label: 'Pre-análisis' },
+  { id: 'post' as const, label: 'Post-análisis' },
+]
 
 export default function App() {
   const connect = useApp((s) => s.connect)
   const watcher = useApp((s) => s.watcher)
   const sheets = useApp((s) => s.sheets)
   const google = useApp((s) => s.google)
+  const menu = useApp((s) => s.menu)
+  const setMenu = useApp((s) => s.setMenu)
   const chatOpen = useApp((s) => s.chatOpen)
   const setChatOpen = useApp((s) => s.setChatOpen)
   const thread = useApp((s) => s.thread)
+  const preThread = useApp((s) => s.preThread)
+  const postThread = useApp((s) => s.postThread)
+  const comparisons = useApp((s) => s.comparisons)
   const sendChat = useApp((s) => s.sendChat)
+  const sendPreChat = useApp((s) => s.sendPreChat)
+  const sendPostChat = useApp((s) => s.sendPostChat)
+  const removeComparison = useApp((s) => s.removeComparison)
   const refreshSheets = useApp((s) => s.refreshSheets)
   const loadSheet = useApp((s) => s.loadSheet)
   const openSheet = useApp((s) => s.openSheet)
@@ -47,7 +51,7 @@ export default function App() {
   const fileRef = useRef<HTMLInputElement>(null)
   const lamp = LAMP[watcher.status] || LAMP.off
   const folders = groupByPath(sheets)
-  const needsUpdate = Boolean(remoteVersion && isNewer(remoteVersion, APP_VERSION))
+  const needsUpdate = needsAppUpdate(remoteVersion, APP_VERSION)
   const currentTab = openSheet?.tabs[tab]
 
   useEffect(() => {
@@ -55,13 +59,6 @@ export default function App() {
     const id = window.setInterval(() => connect(), 20_000)
     return () => window.clearInterval(id)
   }, [connect])
-
-  const autoUpdateOnce = useRef(false)
-  useEffect(() => {
-    if (!needsUpdate || autoUpdateOnce.current) return
-    autoUpdateOnce.current = true
-    void applyAppUpdate()
-  }, [needsUpdate])
 
   const onPick = async (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || [])
@@ -88,9 +85,13 @@ export default function App() {
       <header className="masthead">
         <div className="edition">edición de campo · no es once</div>
         <img className="brand-icon" src={`/icons/icon-192.png?v=${APP_VERSION}`} width={56} height={56} alt="" />
-        <button type="button" className="stamp" onClick={() => setChatOpen(true)}>
-          {APP_NAME.toUpperCase()}
-        </button>
+        {menu === 'general' ? (
+          <button type="button" className="stamp" onClick={() => setChatOpen(true)}>
+            {APP_NAME.toUpperCase()}
+          </button>
+        ) : (
+          <div className="stamp stamp-static">{menu === 'pre' ? 'PRE-ANÁLISIS' : 'POST-ANÁLISIS'}</div>
+        )}
         <div className="lamp-row">
           <span className={`lamp ${lamp.cls}`} />
           <span className="lamp-label">{lamp.text}</span>
@@ -98,9 +99,17 @@ export default function App() {
         </div>
       </header>
 
-      <p className="hint">Tocá el sello para hablarle al escuchador.</p>
+      <nav className="main-nav">
+        {NAV.map((n) => (
+          <button key={n.id} type="button" className={menu === n.id ? 'on' : ''} onClick={() => setMenu(n.id)}>
+            {n.label}
+          </button>
+        ))}
+      </nav>
 
-      {!google.ok && (
+      {menu === 'general' ? <p className="hint">Tocá el sello para hablarle al escuchador.</p> : null}
+
+      {!google.ok && menu === 'general' && (
         <div className="warn">
           Falta vincular Drive. Tocá el botón: elegís tu cuenta de Google del celu (la del Drive) y aceptás permisos. Sin navegador.
           <div className="bind">
@@ -116,86 +125,64 @@ export default function App() {
         </div>
       )}
 
+      {!google.ok && menu !== 'general' ? (
+        <div className="warn">
+          Para analizar necesitás Drive vinculado. Andá a General → Vincular Drive.
+        </div>
+      ) : null}
+
       {toast ? <div className="warn">{toast}</div> : null}
 
-      <div className="dossier">
-        {openSheet ? (
-          <div className="grid-wrap">
-            <button type="button" className="ghost" onClick={() => useApp.setState({ openSheet: null })}>
-              ← carpeta
-            </button>
-            <h2>{openSheet.name}</h2>
-            <div className="tabs">
-              {openSheet.tabs.map((t, i) => (
-                <button
-                  key={t.title}
-                  type="button"
-                  className={i === tab ? 'on' : ''}
-                  onClick={() => useApp.setState({ tab: i })}
-                >
-                  {t.title}
-                </button>
+      <div className={`dossier ${menu !== 'general' ? 'dossier-analysis' : ''}`}>
+        {menu === 'general' ? (
+          <GeneralView
+            openSheet={openSheet}
+            tab={tab}
+            currentTab={currentTab}
+            folders={folders}
+            google={google}
+            sheets={sheets}
+            toast={toast}
+            cell={cell}
+            setCell={setCell}
+            loadSheet={loadSheet}
+            saveCell={saveCell}
+            refreshSheets={refreshSheets}
+          />
+        ) : null}
+
+        {menu === 'pre' ? (
+          <div className="analysis-page">
+            <div className="cmp-list">
+              {!comparisons.length ? (
+                <p className="hint">Todavía no hay comparaciones. Pedile abajo: "compará agosto 2025 con agosto 2026".</p>
+              ) : null}
+              {comparisons.map((c) => (
+                <ComparisonCard key={c.id} comparison={c} onDelete={(id) => void removeComparison(id)} />
               ))}
             </div>
-            <div style={{ overflow: 'auto' }}>
-              <table>
-                <tbody>
-                  {(currentTab?.values || []).slice(0, 80).map((row, ri) => (
-                    <tr key={ri}>
-                      {row.slice(0, 12).map((cellVal, ci) => (
-                        <td
-                          key={ci}
-                          onClick={() => setCell({ row: ri, col: ci, value: cellVal })}
-                        >
-                          {cellVal}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="cell-edit">
-              <input
-                value={cell.value}
-                onChange={(e) => setCell({ ...cell, value: e.target.value })}
-                placeholder="editar celda tocada"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  if (!currentTab) return
-                  void saveCell(currentTab.title, cell.row, cell.col, cell.value)
-                }}
-              >
-                Guardar
-              </button>
-            </div>
+            <AnalysisChat
+              thread={preThread}
+              placeholder='Ej: "compará agosto 2025 con agosto 2026"'
+              onSend={sendPreChat}
+              disabled={!google.ok}
+            />
           </div>
-        ) : (
-          Object.entries(folders).map(([path, files]) => (
-            <section className="folder" key={path}>
-              <h2>{path}</h2>
-              {files.map((f) => (
-                <button key={f.id} type="button" className="sheet-card" onClick={() => void loadSheet(f.id)}>
-                  <strong>{f.name}</strong>
-                  <span>{f.modified ? new Date(f.modified).toLocaleString('es-AR') : 'hoja'}</span>
-                </button>
-              ))}
-            </section>
-          ))
-        )}
-        {google.ok && sheets.length === 0 ? (
-          <p className="hint">
-            {toast
-              ? null
-              : 'No hay hojas todavía en esa carpeta (o están cargando).'}
-            <div className="bind">
-              <button type="button" onClick={() => void refreshSheets()}>
-                Reintentar hojas
-              </button>
-            </div>
-          </p>
+        ) : null}
+
+        {menu === 'post' ? (
+          <div className="analysis-page analysis-page-post">
+            <p className="hint post-hint">
+              Explicá por qué subió o bajó. Ej: "por qué gas vendió más en agosto 2026 que 2025". Usa clima, feriados y
+              ubicación real.
+            </p>
+            <AnalysisChat
+              thread={postThread}
+              placeholder='Ej: "explicá la comparación de agosto"'
+              onSend={sendPostChat}
+              disabled={!google.ok}
+            />
+          </div>
         ) : null}
       </div>
 
@@ -235,12 +222,7 @@ export default function App() {
               <button type="button" className="ghost" onClick={() => fileRef.current?.click()}>
                 foto
               </button>
-              <textarea
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                placeholder="escribí acá…"
-                rows={2}
-              />
+              <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="escribí acá…" rows={2} />
               <button type="submit" className="send">
                 ENVIAR
               </button>
@@ -249,15 +231,118 @@ export default function App() {
         </div>
       ) : null}
 
-      {needsUpdate ? (
+      {needsUpdate && remoteVersion ? (
         <div className="update-ribbon">
-          <span>hay v{remoteVersion} — instalando sola…</span>
-          <button type="button" onClick={() => void applyAppUpdate()}>
+          <span>hay v{remoteVersion} (tenés v{APP_VERSION})</span>
+          <button type="button" onClick={() => void applyAppUpdate(remoteVersion)}>
             Instalar
           </button>
         </div>
       ) : null}
     </div>
+  )
+}
+
+type GeneralProps = {
+  openSheet: ReturnType<typeof useApp.getState>['openSheet']
+  tab: number
+  currentTab: { title: string; values: string[][] } | undefined
+  folders: Record<string, { id: string; name: string; path: string; modified?: string | null }[]>
+  google: { ok: boolean; email?: string; error?: string }
+  sheets: { id: string; name: string; path: string; modified?: string | null }[]
+  toast: string | null
+  cell: { row: number; col: number; value: string }
+  setCell: (c: { row: number; col: number; value: string }) => void
+  loadSheet: (id: string) => Promise<void>
+  saveCell: (tabTitle: string, row: number, col: number, value: string) => Promise<void>
+  refreshSheets: () => Promise<void>
+}
+
+function GeneralView({
+  openSheet,
+  tab,
+  currentTab,
+  folders,
+  google,
+  sheets,
+  toast,
+  cell,
+  setCell,
+  loadSheet,
+  saveCell,
+  refreshSheets,
+}: GeneralProps) {
+  return (
+    <>
+      {openSheet ? (
+        <div className="grid-wrap">
+          <button type="button" className="ghost" onClick={() => useApp.setState({ openSheet: null })}>
+            ← carpeta
+          </button>
+          <h2>{openSheet.name}</h2>
+          <div className="tabs">
+            {openSheet.tabs.map((t, i) => (
+              <button key={t.title} type="button" className={i === tab ? 'on' : ''} onClick={() => useApp.setState({ tab: i })}>
+                {t.title}
+              </button>
+            ))}
+          </div>
+          <div style={{ overflow: 'auto' }}>
+            <table>
+              <tbody>
+                {(currentTab?.values || []).slice(0, 80).map((row, ri) => (
+                  <tr key={ri}>
+                    {row.slice(0, 12).map((cellVal, ci) => (
+                      <td key={ci} onClick={() => setCell({ row: ri, col: ci, value: cellVal })}>
+                        {cellVal}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="cell-edit">
+            <input
+              value={cell.value}
+              onChange={(e) => setCell({ ...cell, value: e.target.value })}
+              placeholder="editar celda tocada"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                if (!currentTab) return
+                void saveCell(currentTab.title, cell.row, cell.col, cell.value)
+              }}
+            >
+              Guardar
+            </button>
+          </div>
+        </div>
+      ) : (
+        Object.entries(folders).map(([path, files]) => (
+          <section className="folder" key={path}>
+            <h2>{path}</h2>
+            {files.map((f) => (
+              <button key={f.id} type="button" className="sheet-card" onClick={() => void loadSheet(f.id)}>
+                <strong>{f.name}</strong>
+                <span>{f.modified ? new Date(f.modified).toLocaleString('es-AR') : 'hoja'}</span>
+              </button>
+            ))}
+          </section>
+        ))
+      )}
+      {google.ok && sheets.length === 0 ? (
+        <p className="hint">
+          {toast ? null : 'No hay hojas todavía en esa carpeta (o están cargando).'}
+          <div className="bind">
+            <button type="button" onClick={() => void refreshSheets()}>
+              Reintentar hojas
+            </button>
+          </div>
+        </p>
+      ) : null}
+    </>
   )
 }
 

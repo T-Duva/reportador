@@ -1,3 +1,5 @@
+import { normalizeVersion } from './update'
+
 const VERSION_URLS = [
   'https://raw.githubusercontent.com/T-Duva/reportador/master/version.json',
   'https://cdn.jsdelivr.net/gh/T-Duva/reportador@master/version.json',
@@ -5,10 +7,6 @@ const VERSION_URLS = [
 
 const RELEASE_URL =
   'https://api.github.com/repos/T-Duva/reportador/releases/latest'
-
-function normalizeVersion(v: string): string {
-  return v.replace(/^v/i, '').trim()
-}
 
 async function fetchJson(url: string, ms = 6000): Promise<unknown | null> {
   const ctrl = new AbortController()
@@ -47,7 +45,7 @@ export function pickNewer(a: string | null | undefined, b: string | null | undef
   if (!a && !b) return null
   if (!a) return b || null
   if (!b) return a
-  const parse = (v: string) => v.split('.').map((x) => Number.parseInt(x, 10) || 0)
+  const parse = (v: string) => normalizeVersion(v).split('.').map((x) => Number.parseInt(x, 10) || 0)
   const pa = parse(a)
   const pb = parse(b)
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) {

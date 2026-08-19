@@ -1,8 +1,10 @@
 import { Capacitor } from '@capacitor/core'
-import { APK_DOWNLOAD } from './lib/apkUrl'
+import { apkDownloadUrl } from './lib/apkUrl'
+import { markUpdateSkipped } from './lib/update'
 import { installApkOnPhone } from './lib/phoneOpen'
 
-export async function applyAppUpdate(): Promise<void> {
+export async function applyAppUpdate(remoteVersion: string): Promise<void> {
+  markUpdateSkipped(remoteVersion)
   try {
     if ('serviceWorker' in navigator) {
       const regs = await navigator.serviceWorker.getRegistrations()
@@ -17,7 +19,7 @@ export async function applyAppUpdate(): Promise<void> {
   }
 
   if (Capacitor.isNativePlatform()) {
-    await installApkOnPhone(APK_DOWNLOAD)
+    await installApkOnPhone(apkDownloadUrl(remoteVersion))
     return
   }
 

@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { APP_VERSION } from '../version'
 import { apiUrl, clearServerCache, resolveServerOrigin, serverFetch } from '../lib/server'
 import { fetchRemoteVersion, pickNewer } from '../lib/remoteVersion'
+import { clearUpdateSkip, isNewerVersion, normalizeVersion } from '../lib/update'
 import { openGoogleOnPhone, openNativeGoogleOnPhone } from '../lib/phoneOpen'
 import type { AppMenu, ChatMsg, Comparison, SheetFile, SheetGrid, WatcherState } from '../types'
 import { deleteComparison, sendPostChat as apiPostChat, sendPreChat as apiPreChat } from '../lib/analysis'
@@ -60,7 +61,7 @@ function applyPayload(set: (p: Partial<Store>) => void, get: () => Store, b: Rec
     if ((b.google as GoogleState).ok) next.toast = null
   }
   if (b.watcher) next.watcher = b.watcher as WatcherState
-  if (typeof b.version === 'string') next.remoteVersion = b.version
+  if (typeof b.version === 'string') next.remoteVersion = normalizeVersion(b.version)
   if (Object.keys(next).length) set(next)
 }
 
@@ -92,8 +93,9 @@ export const useApp = create<Store>((set, get) => ({
         const boot = await serverFetch(`${origin}/api/boot?t=${Date.now()}`, { cache: 'no-store' })
         const b = (await boot.json()) as Record<string, unknown>
         applyPayload(set, get, b)
-        serverVersion = typeof b.version === 'string' ? b.version : null
+        serverVersion = typeof b.version === 'string' ? normalizeVersion(b.version) : null
         set({ connected: true, remoteVersion: serverVersion || get().remoteVersion })
+        if (serverVersion && !isNewerVersion(serverVersion, APP_VERSION)) clearUpdateSkip()
 
         if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
           /* seguir abajo por version remota */
@@ -121,7 +123,10 @@ export const useApp = create<Store>((set, get) => ({
         connecting = false
         const gh = await fetchRemoteVersion()
         const best = pickNewer(pickNewer(serverVersion, gh), get().remoteVersion)
-        if (best) set({ remoteVersion: best })
+        if (best) {
+          set({ remoteVersion: normalizeVersion(best) })
+          if (!isNewerVersion(best, APP_VERSION)) clearUpdateSkip()
+        }
       }
     })()
   },
