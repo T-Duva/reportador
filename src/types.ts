@@ -23,6 +23,7 @@ export type SheetFile = {
   name: string
   path: string
   modified: string | null
+  kind?: 'sheet' | 'excel'
 }
 
 export type SheetGrid = {

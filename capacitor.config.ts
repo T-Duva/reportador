@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli'
 
 const config: CapacitorConfig = {
-  appId: 'com.reportador.app',
+  appId: 'com.ligux.app',
   appName: 'Ligux',
   webDir: 'dist',
   android: {

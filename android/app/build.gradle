@@ -1,14 +1,22 @@
 apply plugin: 'com.android.application'
 
 android {
-    namespace = "com.reportador.app"
+    namespace = "com.ligux.app"
     compileSdk = rootProject.ext.compileSdkVersion
+    signingConfigs {
+        release {
+            storeFile file('ligux-release.keystore')
+            storePassword 'ligux2026'
+            keyAlias 'ligux'
+            keyPassword 'ligux2026'
+        }
+    }
     defaultConfig {
-        applicationId "com.reportador.app"
+        applicationId "com.ligux.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 16
-        versionName "1.0.16"
+        versionCode 22
+        versionName "1.0.22"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              cruncherEnabled = false
@@ -19,6 +27,7 @@ android {
     }
     buildTypes {
         release {
+            signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
@@ -41,6 +50,7 @@ dependencies {
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation "androidx.browser:browser:1.8.0"
+    implementation "com.google.android.gms:play-services-auth:21.3.0"
     implementation project(':capacitor-cordova-android-plugins')
 }
 

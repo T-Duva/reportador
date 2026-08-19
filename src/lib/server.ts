@@ -6,10 +6,27 @@ const DISCOVERY_URLS = [
   'https://raw.githubusercontent.com/T-Duva/reportador/main/server.json',
 ]
 const FALLBACKS = [
-  'https://321tfa-ip-181-117-8-15.tunnelmole.net',
+  'https://silly-peas-strive.loca.lt',
 ]
 
 let cached: string | null = null
+
+function needsTunnelBypass(url: string): boolean {
+  try {
+    return new URL(url).hostname.endsWith('.loca.lt')
+  } catch {
+    return false
+  }
+}
+
+export function tunnelHeaders(url: string): Record<string, string> {
+  return needsTunnelBypass(url) ? { 'Bypass-Tunnel-Reminder': 'true' } : {}
+}
+
+export async function serverFetch(url: string, init?: RequestInit): Promise<Response> {
+  const headers = { ...tunnelHeaders(url), ...(init?.headers as Record<string, string> | undefined) }
+  return fetch(url, { ...init, headers })
+}
 
 export function isNativeApp(): boolean {
   if (Capacitor.isNativePlatform()) return true
@@ -38,7 +55,8 @@ async function healthy(origin: string): Promise<boolean> {
   const ctrl = new AbortController()
   const t = window.setTimeout(() => ctrl.abort(), 3500)
   try {
-    const r = await fetch(`${origin.replace(/\/$/, '')}/api/health?t=${Date.now()}`, {
+    const healthUrl = `${origin.replace(/\/$/, '')}/api/health?t=${Date.now()}`
+    const r = await serverFetch(healthUrl, {
       cache: 'no-store',
       signal: ctrl.signal,
     })
@@ -132,6 +150,12 @@ export async function apiUrl(path: string): Promise<string> {
   const origin = await resolveServerOrigin()
   return `${origin.replace(/\/$/, '')}${path}`
 }
+
+
+
+
+
+
 
 
 

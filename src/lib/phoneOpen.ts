@@ -4,6 +4,10 @@ type PhoneOpenPlugin = {
   openUrl: (opts: { url: string }) => Promise<void>
   installApk: (opts: { url: string }) => Promise<void>
   openAuth: (opts: { url: string }) => Promise<{ code?: string; error?: string; redirectUri?: string }>
+  openNativeGoogleAuth: (opts: {
+    webClientId: string
+    scopes?: string[]
+  }) => Promise<{ code?: string; error?: string; redirectUri?: string; email?: string }>
 }
 
 const PhoneOpen = registerPlugin<PhoneOpenPlugin>('PhoneOpen')
@@ -40,6 +44,18 @@ export async function installApkOnPhone(url: string): Promise<void> {
     return
   }
   location.assign(url)
+}
+
+export async function openNativeGoogleOnPhone(opts: {
+  webClientId: string
+  scopes?: string[]
+}): Promise<{ code: string; redirectUri?: string }> {
+  if (Capacitor.isNativePlatform()) {
+    const r = await PhoneOpen.openNativeGoogleAuth(opts)
+    if (r?.code) return { code: r.code, redirectUri: r.redirectUri || '' }
+    throw new Error(r?.error || 'No se autorizó Google')
+  }
+  throw new Error('Autorizá en el celu y volvé a LIGUX')
 }
 
 export async function openGoogleOnPhone(url: string): Promise<{ code: string; redirectUri?: string }> {

@@ -1,4 +1,4 @@
-package com.reportador.app;
+package com.ligux.app;
 
 import android.app.Activity;
 import android.content.Intent;

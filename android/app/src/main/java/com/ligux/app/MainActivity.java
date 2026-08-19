@@ -1,4 +1,4 @@
-package com.reportador.app;
+package com.ligux.app;
 
 import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;

@@ -102,7 +102,7 @@ export default function App() {
 
       {!google.ok && (
         <div className="warn">
-          Falta vincular Drive. Tocá el botón: se abre Google en el celu. Autorizá tu cuenta (si sale un aviso, tocá Avanzado y Permitir).
+          Falta vincular Drive. Tocá el botón: elegís tu cuenta de Google del celu (la del Drive) y aceptás permisos. Sin navegador.
           <div className="bind">
             <button type="button" onClick={() => void startGoogle()}>
               Vincular Drive
@@ -186,7 +186,16 @@ export default function App() {
           ))
         )}
         {google.ok && sheets.length === 0 ? (
-          <p className="hint">No hay hojas todavía en esa carpeta (o están cargando).</p>
+          <p className="hint">
+            {toast
+              ? null
+              : 'No hay hojas todavía en esa carpeta (o están cargando).'}
+            <div className="bind">
+              <button type="button" onClick={() => void refreshSheets()}>
+                Reintentar hojas
+              </button>
+            </div>
+          </p>
         ) : null}
       </div>
 

@@ -10,6 +10,23 @@ const SCOPES = [
   'https://www.googleapis.com/auth/userinfo.email',
 ]
 
+const SHEET_MIMES = new Set([
+  'application/vnd.google-apps.spreadsheet',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+])
+
+export function friendlyGoogleErr(err) {
+  const msg = String(err?.message || err)
+  if (/Sheets API has not been used|sheets\.googleapis\.com.*disabled|SERVICE_DISABLED.*sheets/i.test(msg)) {
+    return 'Falta activar Google Sheets API en Cloud (Biblioteca → Google Sheets API → Habilitar).'
+  }
+  if (/Drive API has not been used|drive\.googleapis\.com.*disabled|SERVICE_DISABLED.*drive/i.test(msg)) {
+    return 'Falta activar Google Drive API en Cloud (Biblioteca → Google Drive API → Habilitar).'
+  }
+  return msg
+}
+
 function readEnvFile(root) {
   for (const name of ['.env.local', '.env']) {
     const p = path.join(root, name)
@@ -109,6 +126,10 @@ export function googleStatus(root) {
 
 function oauth2Ids(root) {
   readEnvFile(root)
+  const web = loadWebOAuth(root)
+  if (web.clientId && web.clientSecret) {
+    return { clientId: web.clientId, clientSecret: web.clientSecret }
+  }
   const cred = loadCredFile(root)
   const raw = cred?.raw
   let clientId = process.env.GOOGLE_CLIENT_ID || ''
@@ -164,6 +185,41 @@ const PHONE_OAUTH = {
   redirect: 'http://127.0.0.1',
 }
 
+function loadWebOAuth(root) {
+  readEnvFile(root)
+  const fromEnv = {
+    clientId: process.env.GOOGLE_WEB_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || '',
+    clientSecret: process.env.GOOGLE_WEB_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET || '',
+  }
+  if (fromEnv.clientId && fromEnv.clientSecret) return fromEnv
+
+  const cred = loadCredFile(root)
+  const raw = cred?.raw
+  if (raw && !isServiceAccount(raw)) {
+    const web = raw.web || (raw.client_id && raw.client_secret ? raw : null)
+    if (web?.client_id && web?.client_secret) {
+      return { clientId: web.client_id, clientSecret: web.client_secret }
+    }
+  }
+
+  for (const name of ['oauth-web.json', 'credentials-web.json']) {
+    const p = path.join(root, 'data', name)
+    const j = readJson(p)
+    if (j?.clientId && j?.clientSecret) return { clientId: j.clientId, clientSecret: j.clientSecret }
+    if (j?.web?.client_id && j?.web?.client_secret) {
+      return { clientId: j.web.client_id, clientSecret: j.web.client_secret }
+    }
+  }
+
+  return { clientId: '', clientSecret: '' }
+}
+
+export function nativeOAuthConfig(root) {
+  const web = loadWebOAuth(root)
+  if (!web.clientId) return null
+  return { webClientId: web.clientId, scopes: SCOPES }
+}
+
 export function localRedirect(port) {
   return `http://127.0.0.1:${Number(port) || 8789}/api/google/callback`
 }
@@ -188,18 +244,58 @@ function oauthRedirect(root, fallback) {
 export async function startAuth(root, _redirectUri) {
   const redirect = PHONE_OAUTH.redirect
   const client = getOAuth2Client(root, redirect)
-  return client.generateAuthUrl({
+  const url = client.generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent',
     include_granted_scopes: false,
     scope: SCOPES,
   })
+  const native = nativeOAuthConfig(root)
+  if (native) return { ...native, url }
+  return url
 }
 
 export async function finishAuth(root, redirectUri, code) {
+  const native = redirectUri === '' || redirectUri === 'native'
+  if (native) {
+    const { clientId, clientSecret } = oauth2Ids(root)
+    const res = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: clientId,
+        client_secret: clientSecret,
+        grant_type: 'authorization_code',
+      }),
+    })
+    const raw = await res.text()
+    let tokens
+    try {
+      tokens = JSON.parse(raw)
+    } catch {
+      throw new Error(raw.slice(0, 200) || 'Google no devolvió tokens')
+    }
+    if (!res.ok || tokens.error) {
+      throw new Error(tokens.error_description || tokens.error || raw.slice(0, 200))
+    }
+    const client = getOAuth2Client(root, undefined)
+    client.setCredentials(tokens)
+    let email = ''
+    try {
+      const oauth2 = google.oauth2({ version: 'v2', auth: client })
+      const me = await oauth2.userinfo.get()
+      email = me.data.email || ''
+    } catch {
+      /* ok */
+    }
+    fs.mkdirSync(path.join(root, 'data'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'data', 'google-token.json'), JSON.stringify({ ...tokens, email }, null, 2), 'utf8')
+    return { email }
+  }
   const redirect = redirectUri || PHONE_OAUTH.redirect
   const client = getOAuth2Client(root, redirect)
-  const { tokens } = await client.getToken(code)
+  const { tokens } = await client.getToken({ code, redirect_uri: redirect })
   client.setCredentials(tokens)
   let email = ''
   try {
@@ -232,12 +328,14 @@ export async function listSheets(root, redirectUri) {
       for (const f of res.data.files || []) {
         if (f.mimeType === 'application/vnd.google-apps.folder') {
           await walk(f.id, `${pathLabel}/${f.name}`)
-        } else if (f.mimeType === 'application/vnd.google-apps.spreadsheet') {
+        } else if (SHEET_MIMES.has(f.mimeType || '')) {
+          if (/^[_~]ligux/i.test(f.name || '')) continue
           out.push({
             id: f.id,
             name: f.name,
             path: pathLabel,
             modified: f.modifiedTime || null,
+            kind: f.mimeType === 'application/vnd.google-apps.spreadsheet' ? 'sheet' : 'excel',
           })
         }
       }
@@ -251,19 +349,50 @@ export async function listSheets(root, redirectUri) {
 
 export async function readSheet(root, redirectUri, id) {
   const client = await getAuthClient(root, redirectUri)
-  const sheets = google.sheets({ version: 'v4', auth: client })
-  const meta = await sheets.spreadsheets.get({ spreadsheetId: id })
-  const name = meta.data.properties?.title || 'Hoja'
-  const tabs = []
-  for (const tab of meta.data.sheets || []) {
-    const title = tab.properties?.title || 'Hoja'
-    const vals = await sheets.spreadsheets.values.get({
-      spreadsheetId: id,
-      range: `'${title.replace(/'/g, "''")}'`,
+  const drive = google.drive({ version: 'v3', auth: client })
+  const fileMeta = await drive.files.get({
+    fileId: id,
+    fields: 'id,name,mimeType',
+    supportsAllDrives: true,
+  })
+  const mime = fileMeta.data.mimeType || ''
+  let sheetId = id
+  let tempId = null
+  if (mime !== 'application/vnd.google-apps.spreadsheet') {
+    const copy = await drive.files.copy({
+      fileId: id,
+      requestBody: {
+        name: `_ligux_read_${Date.now()}`,
+        mimeType: 'application/vnd.google-apps.spreadsheet',
+      },
+      supportsAllDrives: true,
     })
-    tabs.push({ title, values: vals.data.values || [] })
+    sheetId = copy.data.id || id
+    tempId = sheetId
   }
-  return { id, name, tabs }
+  try {
+    const sheets = google.sheets({ version: 'v4', auth: client })
+    const meta = await sheets.spreadsheets.get({ spreadsheetId: sheetId })
+    const name = fileMeta.data.name || meta.data.properties?.title || 'Hoja'
+    const tabs = []
+    for (const tab of meta.data.sheets || []) {
+      const title = tab.properties?.title || 'Hoja'
+      const vals = await sheets.spreadsheets.values.get({
+        spreadsheetId: sheetId,
+        range: `'${title.replace(/'/g, "''")}'`,
+      })
+      tabs.push({ title, values: vals.data.values || [] })
+    }
+    return { id, name, tabs }
+  } finally {
+    if (tempId) {
+      try {
+        await drive.files.delete({ fileId: tempId })
+      } catch {
+        /* ok */
+      }
+    }
+  }
 }
 
 export async function writeCell(root, redirectUri, id, tab, row, col, value) {

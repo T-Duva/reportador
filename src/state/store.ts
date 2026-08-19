@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { APP_VERSION } from '../version'
-import { apiUrl, resolveServerOrigin } from '../lib/server'
-import { openGoogleOnPhone } from '../lib/phoneOpen'
+import { apiUrl, resolveServerOrigin, serverFetch } from '../lib/server'
+import { openGoogleOnPhone, openNativeGoogleOnPhone } from '../lib/phoneOpen'
 import type { ChatMsg, SheetFile, SheetGrid, WatcherState } from '../types'
 
 type GoogleState = { ok: boolean; email?: string; error?: string }
@@ -42,7 +42,10 @@ function applyPayload(set: (p: Partial<Store>) => void, get: () => Store, b: Rec
   const next: Partial<Store> = {}
   if (Array.isArray(b.thread)) next.thread = mergeThread(get().thread, b.thread as ChatMsg[])
   if (Array.isArray(b.sheets)) next.sheets = b.sheets as SheetFile[]
-  if (b.google) next.google = b.google as GoogleState
+  if (b.google) {
+    next.google = b.google as GoogleState
+    if ((b.google as GoogleState).ok) next.toast = null
+  }
   if (b.watcher) next.watcher = b.watcher as WatcherState
   if (typeof b.version === 'string') next.remoteVersion = b.version
   if (Object.keys(next).length) set(next)
@@ -67,7 +70,7 @@ export const useApp = create<Store>((set, get) => ({
     void (async () => {
       try {
         const origin = await resolveServerOrigin()
-        const boot = await fetch(`${origin}/api/boot?t=${Date.now()}`, { cache: 'no-store' })
+        const boot = await serverFetch(`${origin}/api/boot?t=${Date.now()}`, { cache: 'no-store' })
         const b = (await boot.json()) as Record<string, unknown>
         applyPayload(set, get, b)
         set({ connected: true, remoteVersion: (b.version as string) || get().remoteVersion })
@@ -110,7 +113,7 @@ export const useApp = create<Store>((set, get) => ({
     }
     set({ thread: mergeThread(get().thread, [local]) })
     const url = await apiUrl('/api/report')
-    const r = await fetch(url, {
+    const r = await serverFetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text, photos, version: APP_VERSION }),
@@ -126,7 +129,7 @@ export const useApp = create<Store>((set, get) => ({
 
   refreshSheets: async () => {
     const url = await apiUrl('/api/sheets')
-    const r = await fetch(url, { cache: 'no-store' })
+    const r = await serverFetch(url, { cache: 'no-store' })
     const j = (await r.json()) as { sheets?: SheetFile[]; google?: GoogleState; error?: string }
     set({
       sheets: j.sheets || [],
@@ -137,7 +140,7 @@ export const useApp = create<Store>((set, get) => ({
 
   loadSheet: async (id) => {
     const url = await apiUrl(`/api/sheets/${encodeURIComponent(id)}`)
-    const r = await fetch(url, { cache: 'no-store' })
+    const r = await serverFetch(url, { cache: 'no-store' })
     const j = (await r.json()) as SheetGrid & { error?: string }
     if (j.error) {
       set({ toast: j.error })
@@ -150,7 +153,7 @@ export const useApp = create<Store>((set, get) => ({
     const sheet = get().openSheet
     if (!sheet) return
     const url = await apiUrl(`/api/sheets/${encodeURIComponent(sheet.id)}`)
-    await fetch(url, {
+    await serverFetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ tab: tabTitle, row, col, value }),
@@ -159,25 +162,62 @@ export const useApp = create<Store>((set, get) => ({
   },
 
   startGoogle: async () => {
-    set({ toast: 'Abriendo Google en el celu…' })
+    if (get().google.ok) {
+      set({ toast: null })
+      await get().refreshSheets()
+      return
+    }
+    set({ toast: 'Elegí tu cuenta de Google…' })
     try {
       const url = await apiUrl('/api/google/start')
-      const r = await fetch(url, { cache: 'no-store' })
+      const r = await serverFetch(url, { cache: 'no-store' })
       const raw = await r.text()
-      let j: { url?: string; error?: string }
+      let j: {
+        url?: string
+        native?: boolean
+        webClientId?: string
+        scopes?: string[]
+        error?: string
+      }
       try {
-        j = JSON.parse(raw) as { url?: string; error?: string }
+        j = JSON.parse(raw) as {
+          url?: string
+          native?: boolean
+          webClientId?: string
+          scopes?: string[]
+          error?: string
+        }
       } catch {
         set({ toast: 'No llegué al servidor. Tocá Vincular de nuevo.' })
         return
       }
-      if (j.url) {
-        const auth = await openGoogleOnPhone(j.url)
+      let auth: { code: string; redirectUri?: string } | null = null
+      if (j.native && j.webClientId) {
+        try {
+          auth = await openNativeGoogleOnPhone({ webClientId: j.webClientId, scopes: j.scopes })
+        } catch (err) {
+          const msg = String((err as Error).message || err)
+          if (/Error 10|DEVELOPER_ERROR|\b10\b/.test(msg) && j.url) {
+            set({ toast: 'Selector nativo no configurado, abriendo cuenta de Google…' })
+            auth = await openGoogleOnPhone(j.url)
+          } else {
+            throw err
+          }
+        }
+      } else if (j.url) {
+        set({ toast: 'Abriendo Google en el celu…' })
+        auth = await openGoogleOnPhone(j.url)
+      }
+      if (auth) {
         const finish = await apiUrl('/api/google/finish')
-        const fr = await fetch(finish, {
+        const fr = await serverFetch(finish, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ code: auth.code, redirectUri: auth.redirectUri }),
+          body: JSON.stringify({
+            code: auth.code,
+            redirectUri: auth.redirectUri ?? '',
+            native: Boolean(j.native),
+          }),
         })
         const finishRaw = await fr.text()
         let fj: { ok?: boolean; error?: string; google?: GoogleState; sheets?: SheetFile[] }

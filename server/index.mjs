@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import express from 'express'
 import cors from 'cors'
 import { WebSocketServer } from 'ws'
-import { finishAuth, googleStatus, listSheets, localRedirect, phoneAuthRedirect, readSheet, startAuth, writeCell } from './google.mjs'
+import { finishAuth, friendlyGoogleErr, googleStatus, listSheets, localRedirect, phoneAuthRedirect, readSheet, startAuth, writeCell } from './google.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(__dirname, '..')
@@ -86,7 +86,7 @@ app.get('/api/sheets', async (_req, res) => {
     broadcast({ type: 'sheets', sheets: sheetsCache })
     res.json({ sheets: sheetsCache, google: googleStatus(root) })
   } catch (err) {
-    res.json({ sheets: sheetsCache, google: googleStatus(root), error: String(err.message || err) })
+    res.json({ sheets: sheetsCache, google: googleStatus(root), error: friendlyGoogleErr(err) })
   }
 })
 
@@ -112,17 +112,29 @@ app.post('/api/sheets/:id', async (req, res) => {
 
 app.get('/api/google/start', async (_req, res) => {
   try {
+    const started = await startAuth(root, phoneAuthRedirect())
+    if (started && typeof started === 'object' && started.webClientId) {
+      res.json({
+        native: true,
+        webClientId: started.webClientId,
+        scopes: started.scopes,
+        url: started.url,
+      })
+      return
+    }
     const redirect = phoneAuthRedirect()
     pendingGoogleRedirect = redirect
-    const url = await startAuth(root, redirect)
-    res.json({ url, intercept: true })
+    res.json({ url: started, intercept: true })
   } catch (err) {
     res.json({ error: String(err.message || err) })
   }
 })
 
 async function completeGoogle(code, redirectHint) {
-  const redirect = redirectHint || pendingGoogleRedirect || phoneAuthRedirect()
+  const redirect =
+    redirectHint !== undefined && redirectHint !== null
+      ? redirectHint
+      : pendingGoogleRedirect || phoneAuthRedirect()
   pendingGoogleRedirect = redirect
   const { email } = await finishAuth(root, redirect, code)
   broadcast({ type: 'google', google: googleStatus(root) })
@@ -150,7 +162,12 @@ app.post('/api/google/finish', async (req, res) => {
   try {
     const code = String(req.body?.code || '')
     if (!code) return res.status(400).json({ error: 'Falta code' })
-    const redirect = req.body?.redirectUri || pendingGoogleRedirect || phoneAuthRedirect()
+    const redirect =
+      req.body && ('redirectUri' in req.body || req.body?.native)
+        ? req.body.native
+          ? ''
+          : String(req.body.redirectUri)
+        : pendingGoogleRedirect || phoneAuthRedirect()
     const { email } = await completeGoogle(code, redirect)
     res.json({ ok: true, email, google: googleStatus(root), sheets: sheetsCache })
   } catch (err) {

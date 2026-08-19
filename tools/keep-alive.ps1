@@ -9,9 +9,13 @@ $keepLog = Join-Path $root 'tools\_keep-alive.log'
 $pollSecActive = 90
 $pollSecSleep = 20   # corto para que /prender de Telegram se note ya
 $wakeHour = 9
-$sleepHour = 19
+$sleepHour = 23
 $localHealth = 'http://127.0.0.1:8789/api/health'
 $script:ModeActive = $null
+$script:PublicFailCount = 0
+$script:LastTunnelRestart = [datetime]::MinValue
+$minRestartGapSec = 900   # 15 min entre reinicios de tunel
+$failThreshold = 3        # 3 chequeos seguidos antes de reiniciar
 
 function Write-Keep([string]$msg) {
   $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $msg"
@@ -30,14 +34,21 @@ function Test-ActiveHours {
   return ($h -ge $wakeHour -and $h -lt $sleepHour)
 }
 
-function Test-UrlOk([string]$url, [int]$timeoutSec = 8) {
-  if (-not $url) { return $false }
+function Test-HealthOk([string]$baseUrl, [int]$timeoutSec = 8) {
+  if (-not $baseUrl) { return $false }
+  $url = "$($baseUrl.Trim().TrimEnd('/'))/api/health?t=$((Get-Date).Ticks)"
   try {
     $r = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec $timeoutSec -ErrorAction Stop
-    return ($r.StatusCode -ge 200 -and $r.StatusCode -lt 300)
+    if ($r.StatusCode -lt 200 -or $r.StatusCode -ge 300) { return $false }
+    $j = $r.Content | ConvertFrom-Json
+    return [bool]$j.ok
   } catch {
     return $false
   }
+}
+
+function Test-UrlOk([string]$url, [int]$timeoutSec = 8) {
+  return Test-HealthOk $url $timeoutSec
 }
 
 function Get-PublishedUrl {
@@ -114,6 +125,50 @@ function Stop-Tunnelmole {
     }
 }
 
+function Stop-Localtunnel {
+  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -match 'localtunnel' -and $_.CommandLine -match '8789' } |
+    ForEach-Object {
+      Write-Keep "kill localtunnel pid=$($_.ProcessId)"
+      Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Stop-PublicTunnel {
+  Stop-Tunnelmole
+  Stop-Localtunnel
+}
+
+function Start-LocaltunnelAndWaitUrl {
+  $outLog = Join-Path $root 'tools\_localtunnel.out.log'
+  $errLog = Join-Path $root 'tools\_localtunnel.err.log'
+  foreach ($f in @($outLog, $errLog)) {
+    if (Test-Path $f) { Remove-Item $f -Force -ErrorAction SilentlyContinue }
+  }
+  Write-Keep 'arrancando localtunnel 8789...'
+  $p = Start-Process -FilePath 'npx.cmd' -ArgumentList @('--yes', 'localtunnel', '--port', '8789') `
+    -WorkingDirectory $root -WindowStyle Hidden `
+    -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
+
+  $deadline = (Get-Date).AddSeconds(45)
+  while ((Get-Date) -lt $deadline) {
+    Start-Sleep -Seconds 2
+    $raw = ''
+    foreach ($f in @($outLog, $errLog)) {
+      if (Test-Path $f) {
+        try { $raw += (Get-Content $f -Raw -ErrorAction SilentlyContinue) } catch {}
+      }
+    }
+    if ($raw -match 'https://([a-z0-9-]+\.loca\.lt)') {
+      $url = 'https://' + $Matches[1]
+      Write-Keep "localtunnel URL $url (pid=$($p.Id))"
+      return $url
+    }
+  }
+  Write-Keep 'localtunnel: no aparecio URL a tiempo'
+  return $null
+}
+
 function Start-TunnelmoleAndWaitUrl {
   $outLog = Join-Path $root 'tools\_tunnelmole.out.log'
   $errLog = Join-Path $root 'tools\_tunnelmole.err.log'
@@ -142,28 +197,54 @@ function Start-TunnelmoleAndWaitUrl {
     }
   }
   Write-Keep 'tunnelmole: no aparecio URL a tiempo'
+  $err = ''
+  if (Test-Path $errLog) {
+    try { $err = Get-Content $errLog -Raw -ErrorAction SilentlyContinue } catch {}
+  }
+  if ($err -match 'limited to 10 tunnels') {
+    Write-Keep 'tunnelmole rate limit -> probando localtunnel'
+    return Start-LocaltunnelAndWaitUrl
+  }
   return $null
+}
+
+function Wait-TunnelHealth([string]$newUrl) {
+  for ($i = 0; $i -lt 12; $i++) {
+    if (Test-HealthOk $newUrl 10) { return $true }
+    Start-Sleep -Seconds 3
+  }
+  Write-Keep "tunel nuevo no responde health: $newUrl"
+  return $false
 }
 
 function Ensure-PublicTunnel {
   $url = Get-PublishedUrl
-  if ($url -and (Test-UrlOk "$url/api/health" 12)) {
+  if ($url -and (Test-HealthOk $url 12)) {
+    $script:PublicFailCount = 0
     return $true
   }
-  Write-Keep "publico FAIL ($url) -> reinicio tunel"
-  Stop-Tunnelmole
-  Start-Sleep -Seconds 2
-  $newUrl = Start-TunnelmoleAndWaitUrl
-  if (-not $newUrl) { return $false }
-  $ok = $false
-  for ($i = 0; $i -lt 10; $i++) {
-    if (Test-UrlOk "$newUrl/api/health" 10) { $ok = $true; break }
-    Start-Sleep -Seconds 2
-  }
-  if (-not $ok) {
-    Write-Keep "tunel nuevo no responde health: $newUrl"
+
+  $script:PublicFailCount++
+  Write-Keep "publico FAIL ($url) intento $($script:PublicFailCount)/$failThreshold"
+  if ($script:PublicFailCount -lt $failThreshold) { return $false }
+
+  $since = ((Get-Date) - $script:LastTunnelRestart).TotalSeconds
+  if ($since -lt $minRestartGapSec) {
+    $wait = [math]::Ceiling($minRestartGapSec - $since)
+    Write-Keep "cooldown tunel: faltan ${wait}s (no reinicio todavia)"
     return $false
   }
+
+  Write-Keep 'reinicio tunel (tras varios fallos seguidos)'
+  Stop-PublicTunnel
+  Start-Sleep -Seconds 2
+  $newUrl = Start-LocaltunnelAndWaitUrl
+  if (-not $newUrl) { $newUrl = Start-TunnelmoleAndWaitUrl }
+  if (-not $newUrl) { return $false }
+  if (-not (Wait-TunnelHealth $newUrl)) { return $false }
+
+  $script:LastTunnelRestart = Get-Date
+  $script:PublicFailCount = 0
   $prev = Get-PublishedUrl
   Set-PublishedUrl $newUrl
   if ($prev -ne $newUrl) {
@@ -199,7 +280,7 @@ function Send-WatcherOff {
 
 function Enter-SleepMode {
   Write-Keep "horario reposo ($sleepHour`:00-$($wakeHour - 1):59) -> apagando"
-  Stop-Tunnelmole
+  Stop-PublicTunnel
   Stop-Escuchador
   Send-WatcherOff
   Stop-Server

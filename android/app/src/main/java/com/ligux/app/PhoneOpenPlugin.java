@@ -1,4 +1,4 @@
-package com.reportador.app;
+package com.ligux.app;
 
 import android.app.Activity;
 import android.content.Intent;
@@ -8,6 +8,7 @@ import android.os.Environment;
 import android.provider.Settings;
 import androidx.activity.result.ActivityResult;
 import androidx.core.content.FileProvider;
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -50,6 +51,46 @@ public class PhoneOpenPlugin extends Plugin {
         Intent i = new Intent(getContext(), OAuthActivity.class);
         i.putExtra("url", url);
         startActivityForResult(call, i, "onAuthResult");
+    }
+
+    @PluginMethod
+    public void openNativeGoogleAuth(PluginCall call) {
+        String webClientId = call.getString("webClientId");
+        if (webClientId == null || webClientId.isEmpty()) {
+            call.reject("Falta webClientId");
+            return;
+        }
+        String[] scopes = null;
+        JSArray scopesArr = call.getArray("scopes");
+        if (scopesArr != null) {
+            scopes = new String[scopesArr.length()];
+            for (int i = 0; i < scopesArr.length(); i++) {
+                scopes[i] = scopesArr.optString(i, "");
+            }
+        }
+        Intent i = new Intent(getContext(), NativeGoogleAuthActivity.class);
+        i.putExtra("webClientId", webClientId);
+        if (scopes != null) i.putExtra("scopes", scopes);
+        startActivityForResult(call, i, "onNativeAuthResult");
+    }
+
+    @ActivityCallback
+    private void onNativeAuthResult(PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        Intent data = result.getData();
+        if (result.getResultCode() == Activity.RESULT_OK && data != null) {
+            String code = data.getStringExtra("code");
+            String redirectUri = data.getStringExtra("redirectUri");
+            String email = data.getStringExtra("email");
+            JSObject ret = new JSObject();
+            ret.put("code", code);
+            if (redirectUri != null) ret.put("redirectUri", redirectUri);
+            if (email != null) ret.put("email", email);
+            call.resolve(ret);
+            return;
+        }
+        String err = data != null ? data.getStringExtra("error") : "cancelado";
+        call.reject(err == null ? "cancelado" : err);
     }
 
     @ActivityCallback
