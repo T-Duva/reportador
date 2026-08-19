@@ -6,7 +6,7 @@ const DISCOVERY_URLS = [
   'https://raw.githubusercontent.com/T-Duva/reportador/main/server.json',
 ]
 const FALLBACKS = [
-  'https://eight-spiders-occur.loca.lt',
+  'https://cool-humans-search.loca.lt',
 ]
 
 let cached: string | null = null
@@ -159,6 +159,11 @@ export async function apiUrl(path: string): Promise<string> {
   const origin = await resolveServerOrigin()
   return `${origin.replace(/\/$/, '')}${path}`
 }
+
+
+
+
+
 
 
 

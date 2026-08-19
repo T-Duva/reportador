@@ -1,8 +1,10 @@
 import { create } from 'zustand'
 import { APP_VERSION } from '../version'
 import { apiUrl, clearServerCache, resolveServerOrigin, serverFetch } from '../lib/server'
+import { fetchRemoteVersion, pickNewer } from '../lib/remoteVersion'
 import { openGoogleOnPhone, openNativeGoogleOnPhone } from '../lib/phoneOpen'
-import type { ChatMsg, SheetFile, SheetGrid, WatcherState } from '../types'
+import type { AppMenu, ChatMsg, Comparison, SheetFile, SheetGrid, WatcherState } from '../types'
+import { deleteComparison, sendPostChat as apiPostChat, sendPreChat as apiPreChat } from '../lib/analysis'
 
 type GoogleState = { ok: boolean; email?: string; error?: string }
 
@@ -10,6 +12,10 @@ type Store = {
   connected: boolean
   watcher: WatcherState
   thread: ChatMsg[]
+  preThread: ChatMsg[]
+  postThread: ChatMsg[]
+  comparisons: Comparison[]
+  menu: AppMenu
   sheets: SheetFile[]
   google: GoogleState
   remoteVersion: string | null
@@ -18,8 +24,12 @@ type Store = {
   tab: number
   toast: string | null
   setChatOpen: (v: boolean) => void
+  setMenu: (m: AppMenu) => void
   connect: () => void
   sendChat: (text: string, photos?: string[]) => Promise<void>
+  sendPreChat: (text: string) => Promise<void>
+  sendPostChat: (text: string) => Promise<void>
+  removeComparison: (id: string) => Promise<void>
   refreshSheets: () => Promise<void>
   loadSheet: (id: string) => Promise<void>
   saveCell: (tabTitle: string, row: number, col: number, value: string) => Promise<void>
@@ -41,6 +51,9 @@ function mergeThread(local: ChatMsg[], incoming?: ChatMsg[] | null): ChatMsg[] {
 function applyPayload(set: (p: Partial<Store>) => void, get: () => Store, b: Record<string, unknown>) {
   const next: Partial<Store> = {}
   if (Array.isArray(b.thread)) next.thread = mergeThread(get().thread, b.thread as ChatMsg[])
+  if (Array.isArray(b.preThread)) next.preThread = mergeThread(get().preThread, b.preThread as ChatMsg[])
+  if (Array.isArray(b.postThread)) next.postThread = mergeThread(get().postThread, b.postThread as ChatMsg[])
+  if (Array.isArray(b.comparisons)) next.comparisons = b.comparisons as Comparison[]
   if (Array.isArray(b.sheets)) next.sheets = b.sheets as SheetFile[]
   if (b.google) {
     next.google = b.google as GoogleState
@@ -55,6 +68,10 @@ export const useApp = create<Store>((set, get) => ({
   connected: false,
   watcher: { status: 'off', lastSeenAt: 0, pendingCount: 0 },
   thread: [],
+  preThread: [],
+  postThread: [],
+  comparisons: [],
+  menu: 'general',
   sheets: [],
   google: { ok: false },
   remoteVersion: null,
@@ -63,41 +80,48 @@ export const useApp = create<Store>((set, get) => ({
   tab: 0,
   toast: null,
   setChatOpen: (v) => set({ chatOpen: v }),
+  setMenu: (m) => set({ menu: m, openSheet: m === 'general' ? get().openSheet : null }),
 
   connect: () => {
     if (connecting) return
     connecting = true
     void (async () => {
+      let serverVersion: string | null = null
       try {
         const origin = await resolveServerOrigin()
         const boot = await serverFetch(`${origin}/api/boot?t=${Date.now()}`, { cache: 'no-store' })
         const b = (await boot.json()) as Record<string, unknown>
         applyPayload(set, get, b)
-        set({ connected: true, remoteVersion: (b.version as string) || get().remoteVersion })
+        serverVersion = typeof b.version === 'string' ? b.version : null
+        set({ connected: true, remoteVersion: serverVersion || get().remoteVersion })
 
         if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-          return
-        }
-        const wsUrl = origin.replace(/^http/, 'ws') + '/ws'
-        ws = new WebSocket(wsUrl)
-        ws.onmessage = (ev) => {
-          try {
-            const msg = JSON.parse(String(ev.data)) as Record<string, unknown>
-            applyPayload(set, get, msg)
-          } catch {
-            /* ignore */
+          /* seguir abajo por version remota */
+        } else {
+          const wsUrl = origin.replace(/^http/, 'ws') + '/ws'
+          ws = new WebSocket(wsUrl)
+          ws.onmessage = (ev) => {
+            try {
+              const msg = JSON.parse(String(ev.data)) as Record<string, unknown>
+              applyPayload(set, get, msg)
+            } catch {
+              /* ignore */
+            }
           }
-        }
-        ws.onopen = () => set({ connected: true })
-        ws.onclose = () => {
-          set({ connected: false })
-          ws = null
+          ws.onopen = () => set({ connected: true })
+          ws.onclose = () => {
+            set({ connected: false })
+            ws = null
+          }
         }
       } catch {
         clearServerCache()
         set({ connected: false })
       } finally {
         connecting = false
+        const gh = await fetchRemoteVersion()
+        const best = pickNewer(pickNewer(serverVersion, gh), get().remoteVersion)
+        if (best) set({ remoteVersion: best })
       }
     })()
   },
@@ -126,6 +150,36 @@ export const useApp = create<Store>((set, get) => ({
     }
     const withoutTemp = get().thread.filter((m) => m.id !== tempId)
     set({ thread: mergeThread(withoutTemp, j.thread) })
+  },
+
+  sendPreChat: async (text) => {
+    const tempId = `local-pre-${Date.now()}`
+    const local: ChatMsg = { id: tempId, role: 'user', text, at: Date.now() }
+    set({ preThread: mergeThread(get().preThread, [local]) })
+    const j = await apiPreChat(text)
+    const withoutTemp = get().preThread.filter((m) => m.id !== tempId)
+    set({
+      preThread: mergeThread(withoutTemp, j.preThread),
+      comparisons: j.comparisons ?? get().comparisons,
+      toast: j.error && !j.ok ? j.error : get().toast,
+    })
+  },
+
+  sendPostChat: async (text) => {
+    const tempId = `local-post-${Date.now()}`
+    const local: ChatMsg = { id: tempId, role: 'user', text, at: Date.now() }
+    set({ postThread: mergeThread(get().postThread, [local]) })
+    const j = await apiPostChat(text)
+    const withoutTemp = get().postThread.filter((m) => m.id !== tempId)
+    set({
+      postThread: mergeThread(withoutTemp, j.postThread),
+      toast: j.error && !j.ok ? j.error : get().toast,
+    })
+  },
+
+  removeComparison: async (id) => {
+    const list = await deleteComparison(id)
+    set({ comparisons: list })
   },
 
   refreshSheets: async () => {

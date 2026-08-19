@@ -62,6 +62,11 @@ if (-not (Test-Path $built)) { throw "No se genero $built" }
 New-Item -ItemType Directory -Force -Path (Join-Path $root 'apk-out') | Out-Null
 Copy-Item $built (Join-Path $root 'apk-out\app-debug.apk') -Force
 Copy-Item $built (Join-Path $root 'reportador.apk') -Force
+$ver = (Get-Content (Join-Path $root 'src\version.ts') -Raw) -replace ".*APP_VERSION = '([^']+)'.*",'$1'
+if ($ver -match "^\d+\.\d+\.\d+$") {
+  '{"version":"' + $ver + '"}' | Set-Content -Path (Join-Path $root 'version.json') -Encoding UTF8 -NoNewline
+  Write-Host "version.json -> $ver"
+}
 $apkDl = Join-Path $root 'apk-dl'
 if (Test-Path $apkDl) { Copy-Item $built (Join-Path $apkDl 'app-debug.apk') -Force }
 Write-Host "Listo: reportador.apk ($( (Get-Item (Join-Path $root 'reportador.apk')).Length ) bytes)"
