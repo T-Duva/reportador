@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { APP_VERSION } from '../version'
-import { apiUrl, resolveServerOrigin, serverFetch } from '../lib/server'
+import { apiUrl, clearServerCache, resolveServerOrigin, serverFetch } from '../lib/server'
 import { openGoogleOnPhone, openNativeGoogleOnPhone } from '../lib/phoneOpen'
 import type { ChatMsg, SheetFile, SheetGrid, WatcherState } from '../types'
 
@@ -94,6 +94,7 @@ export const useApp = create<Store>((set, get) => ({
           ws = null
         }
       } catch {
+        clearServerCache()
         set({ connected: false })
       } finally {
         connecting = false

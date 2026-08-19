@@ -11,6 +11,15 @@ const FALLBACKS = [
 
 let cached: string | null = null
 
+export function clearServerCache() {
+  cached = null
+  try {
+    localStorage.removeItem('reportador.server')
+  } catch {
+    /* privado */
+  }
+}
+
 function needsTunnelBypass(url: string): boolean {
   try {
     return new URL(url).hostname.endsWith('.loca.lt')
