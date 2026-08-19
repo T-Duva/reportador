@@ -61,6 +61,11 @@ button { cursor: pointer; }
   text-transform: uppercase;
   color: var(--muted);
 }
+.brand-icon {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+}
 
 .stamp {
   appearance: none;

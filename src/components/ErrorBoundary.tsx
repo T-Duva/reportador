@@ -12,7 +12,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { err: str
     if (this.state.err) {
       return (
         <div style={{ padding: '1.2rem', fontFamily: 'serif' }}>
-          <p>Algo se trabó en Reportador.</p>
+          <p>Algo se trabó en Ligux.</p>
           <p style={{ opacity: 0.7 }}>{this.state.err}</p>
           <button type="button" onClick={() => location.reload()}>
             Reintentar

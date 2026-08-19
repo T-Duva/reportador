@@ -12,8 +12,8 @@ export default defineConfig({
       filename: 'sw.ts',
       includeAssets: ['icons/icon-192.png', 'icons/icon-512.png'],
       manifest: {
-        name: 'Reportador',
-        short_name: 'Reportador',
+        name: 'Ligux',
+        short_name: 'Ligux',
         description: 'Mesa de reportes y hojas de Drive',
         theme_color: '#b42318',
         background_color: '#efe6d4',

@@ -1,5 +1,6 @@
 import { Capacitor } from '@capacitor/core'
 import { APK_DOWNLOAD } from './lib/apkUrl'
+import { installApkOnPhone } from './lib/phoneOpen'
 
 export async function applyAppUpdate(): Promise<void> {
   try {
@@ -15,9 +16,8 @@ export async function applyAppUpdate(): Promise<void> {
     /* seguir */
   }
 
-  // Nunca saltar a una página web. En el celular se baja el APK nuevo.
   if (Capacitor.isNativePlatform()) {
-    window.open(APK_DOWNLOAD, '_system')
+    await installApkOnPhone(APK_DOWNLOAD)
     return
   }
 

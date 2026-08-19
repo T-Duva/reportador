@@ -7,7 +7,7 @@ $serverJson = Join-Path $root 'server.json'
 $tunnelLog = Join-Path $root 'tools\_tunnelmole.log'
 $keepLog = Join-Path $root 'tools\_keep-alive.log'
 $pollSecActive = 90
-$pollSecSleep = 300
+$pollSecSleep = 20   # corto para que /prender de Telegram se note ya
 $wakeHour = 9
 $sleepHour = 19
 $localHealth = 'http://127.0.0.1:8789/api/health'
@@ -19,7 +19,13 @@ function Write-Keep([string]$msg) {
   try { Add-Content -Path $keepLog -Value $line -Encoding UTF8 } catch {}
 }
 
+function Test-TelegramForce {
+  $forceRoot = 'E:\escuchadores-bot\data\force'
+  return (Test-Path (Join-Path $forceRoot 'all')) -or (Test-Path (Join-Path $forceRoot 'reportador'))
+}
+
 function Test-ActiveHours {
+  if (Test-TelegramForce) { return $true }
   $h = (Get-Date).Hour
   return ($h -ge $wakeHour -and $h -lt $sleepHour)
 }

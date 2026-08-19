@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli'
 
 const config: CapacitorConfig = {
   appId: 'com.reportador.app',
-  appName: 'Reportador',
+  appName: 'Ligux',
   webDir: 'dist',
   android: {
     allowMixedContent: true,
@@ -17,6 +17,12 @@ const config: CapacitorConfig = {
       'raw.githubusercontent.com',
       'cdn.jsdelivr.net',
       '192.168.1.27',
+      '*.google.com',
+      'accounts.google.com',
+      '*.googleusercontent.com',
+      'sdk.cloud.google.com',
+      'github.com',
+      '*.githubusercontent.com',
     ],
   },
 }

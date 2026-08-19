@@ -1,11 +1,13 @@
-import { Capacitor } from '@capacitor/core'
+﻿import { Capacitor } from '@capacitor/core'
 
 const DISCOVERY_URLS = [
   'https://raw.githubusercontent.com/T-Duva/reportador/master/server.json',
   'https://cdn.jsdelivr.net/gh/T-Duva/reportador@master/server.json',
   'https://raw.githubusercontent.com/T-Duva/reportador/main/server.json',
 ]
-const FALLBACKS = ['https://gwzv38-ip-181-117-8-15.tunnelmole.net']
+const FALLBACKS = [
+  'https://321tfa-ip-181-117-8-15.tunnelmole.net',
+]
 
 let cached: string | null = null
 
@@ -40,7 +42,9 @@ async function healthy(origin: string): Promise<boolean> {
       cache: 'no-store',
       signal: ctrl.signal,
     })
-    return r.ok
+    if (!r.ok) return false
+    const j = (await r.json()) as { ok?: boolean }
+    return Boolean(j && j.ok)
   } catch {
     return false
   } finally {
@@ -128,3 +132,6 @@ export async function apiUrl(path: string): Promise<string> {
   const origin = await resolveServerOrigin()
   return `${origin.replace(/\/$/, '')}${path}`
 }
+
+
+

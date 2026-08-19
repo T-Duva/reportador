@@ -1,4 +1,4 @@
-﻿# Compila el APK con permisos de camara y lo deja en reportador.apk
+﻿# Compila el APK (icono Shell, sin permisos de más) y lo deja en reportador.apk
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
@@ -19,6 +19,9 @@ npm run build | Out-Host
 
 Write-Host 'Sincronizando Capacitor...'
 npx cap sync android | Out-Host
+
+Write-Host 'Icono desde la foto de Tomás (después del sync)...'
+python (Join-Path $PSScriptRoot 'make-ligux-icon.py') | Out-Host
 
 $sdkRoot = $env:ANDROID_HOME
 if (-not $sdkRoot) { $sdkRoot = $env:ANDROID_SDK_ROOT }
@@ -45,10 +48,10 @@ if (-not (Test-Path (Join-Path $sdkRoot 'platform-tools\adb.exe'))) {
 $localProps = Join-Path $root 'android\local.properties'
 "sdk.dir=$($sdkRoot -replace '\\','\\')" | Set-Content -Encoding ascii $localProps
 
-Write-Host 'Gradle assembleDebug...'
+Write-Host 'Gradle clean + assembleDebug...'
 Push-Location (Join-Path $root 'android')
 try {
-  .\gradlew.bat assembleDebug | Out-Host
+  .\gradlew.bat clean assembleDebug | Out-Host
 } finally {
   Pop-Location
 }

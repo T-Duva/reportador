@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { applyAppUpdate } from './nativeBoot'
 import { useApp } from './state/store'
-import { APP_VERSION } from './version'
+import { APP_NAME, APP_VERSION } from './version'
 import type { WatcherStatus } from './types'
 
 const LAMP: Record<WatcherStatus, { cls: string; text: string }> = {
@@ -46,6 +46,9 @@ export default function App() {
   const [cell, setCell] = useState({ row: 1, col: 0, value: '' })
   const fileRef = useRef<HTMLInputElement>(null)
   const lamp = LAMP[watcher.status] || LAMP.off
+  const folders = groupByPath(sheets)
+  const needsUpdate = Boolean(remoteVersion && isNewer(remoteVersion, APP_VERSION))
+  const currentTab = openSheet?.tabs[tab]
 
   useEffect(() => {
     connect()
@@ -53,9 +56,12 @@ export default function App() {
     return () => window.clearInterval(id)
   }, [connect])
 
-  const folders = groupByPath(sheets)
-  const needsUpdate = Boolean(remoteVersion && isNewer(remoteVersion, APP_VERSION))
-  const currentTab = openSheet?.tabs[tab]
+  const autoUpdateOnce = useRef(false)
+  useEffect(() => {
+    if (!needsUpdate || autoUpdateOnce.current) return
+    autoUpdateOnce.current = true
+    void applyAppUpdate()
+  }, [needsUpdate])
 
   const onPick = async (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || [])
@@ -81,8 +87,9 @@ export default function App() {
     <div className="desk">
       <header className="masthead">
         <div className="edition">edición de campo · no es once</div>
+        <img className="brand-icon" src={`/icons/icon-192.png?v=${APP_VERSION}`} width={56} height={56} alt="" />
         <button type="button" className="stamp" onClick={() => setChatOpen(true)}>
-          REPORTADOR
+          {APP_NAME.toUpperCase()}
         </button>
         <div className="lamp-row">
           <span className={`lamp ${lamp.cls}`} />
@@ -95,7 +102,7 @@ export default function App() {
 
       {!google.ok && (
         <div className="warn">
-          Falta vincular Google (sin contraseña: se abre el navegador en la PC).
+          Falta vincular Drive. Tocá el botón: se abre Google en el celu. Autorizá tu cuenta (si sale un aviso, tocá Avanzado y Permitir).
           <div className="bind">
             <button type="button" onClick={() => void startGoogle()}>
               Vincular Drive
@@ -105,7 +112,7 @@ export default function App() {
             </button>
           </div>
           {google.email ? <div>cuenta: {google.email}</div> : null}
-          {google.error ? <div>{google.error}</div> : null}
+          {google.error && !/PC|compu|Chrome|explorador/i.test(google.error) ? <div>{google.error}</div> : null}
         </div>
       )}
 
@@ -235,11 +242,9 @@ export default function App() {
 
       {needsUpdate ? (
         <div className="update-ribbon">
-          <span>
-            hay v{remoteVersion} (estás en v{APP_VERSION})
-          </span>
+          <span>hay v{remoteVersion} — instalando sola…</span>
           <button type="button" onClick={() => void applyAppUpdate()}>
-            Instalar APK
+            Instalar
           </button>
         </div>
       ) : null}

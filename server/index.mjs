@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import express from 'express'
 import cors from 'cors'
 import { WebSocketServer } from 'ws'
-import { finishAuth, googleStatus, listSheets, readSheet, startAuth, writeCell } from './google.mjs'
+import { finishAuth, googleStatus, listSheets, localRedirect, phoneAuthRedirect, readSheet, startAuth, writeCell } from './google.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(__dirname, '..')
@@ -37,15 +37,18 @@ let sheetsCache = []
 let watcher = { status: 'off', lastSeenAt: 0, pendingCount: 0, error: undefined }
 let lastBeatAt = 0
 let workingSince = 0
+let pendingGoogleRedirect = localRedirect(PORT)
+
+function redirectFromReq(req) {
+  const xfHost = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim()
+  const xfProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim()
+  const host = xfHost || String(req.headers.host || '').trim() || `127.0.0.1:${PORT}`
+  const proto = xfProto || req.protocol || 'http'
+  return `${proto}://${host}/api/google/callback`
+}
 
 function appVersion() {
   return loadJson(path.join(root, 'package.json'), { version: '0.0.0' }).version || '0.0.0'
-}
-
-function redirectUri(req) {
-  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http')
-  const host = req.headers.host
-  return `${proto}://${host}/api/google/callback`
 }
 
 const app = express()
@@ -57,12 +60,20 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, version: appVersion(), watcher })
 })
 
-app.get('/api/boot', (_req, res) => {
+app.get('/api/boot', async (_req, res) => {
   res.setHeader('Cache-Control', 'no-store')
+  const google = googleStatus(root)
+  if (google.ok && sheetsCache.length === 0) {
+    try {
+      sheetsCache = await listSheets(root, localRedirect(PORT))
+    } catch {
+      /* se reintenta desde /api/sheets */
+    }
+  }
   res.json({
     thread,
     sheets: sheetsCache,
-    google: googleStatus(root),
+    google,
     watcher,
     version: appVersion(),
   })
@@ -99,30 +110,51 @@ app.post('/api/sheets/:id', async (req, res) => {
   }
 })
 
-app.get('/api/google/start', async (req, res) => {
+app.get('/api/google/start', async (_req, res) => {
   try {
-    const url = await startAuth(root, redirectUri(req))
-    res.json({ url })
+    const redirect = phoneAuthRedirect()
+    pendingGoogleRedirect = redirect
+    const url = await startAuth(root, redirect)
+    res.json({ url, intercept: true })
   } catch (err) {
     res.json({ error: String(err.message || err) })
   }
 })
 
+async function completeGoogle(code, redirectHint) {
+  const redirect = redirectHint || pendingGoogleRedirect || phoneAuthRedirect()
+  pendingGoogleRedirect = redirect
+  const { email } = await finishAuth(root, redirect, code)
+  broadcast({ type: 'google', google: googleStatus(root) })
+  try {
+    sheetsCache = await listSheets(root, redirect)
+    broadcast({ type: 'sheets', sheets: sheetsCache, google: googleStatus(root) })
+  } catch {
+    /* list later */
+  }
+  return { email }
+}
+
 app.get('/api/google/callback', async (req, res) => {
   try {
     const code = String(req.query.code || '')
     if (!code) return res.status(400).send('Falta code')
-    const { email } = await finishAuth(root, redirectUri(req), code)
-    broadcast({ type: 'google', google: googleStatus(root) })
-    try {
-      sheetsCache = await listSheets(root, redirectUri(req))
-      broadcast({ type: 'sheets', sheets: sheetsCache })
-    } catch {
-      /* list later */
-    }
-    res.type('html').send(`<p style="font-family:serif">Listo${email ? `: ${email}` : ''}. Ya podés volver a Reportador.</p>`)
+    const { email } = await completeGoogle(code, pendingGoogleRedirect || redirectFromReq(req))
+    res.type('html').send(`<p style="font-family:serif">Listo${email ? `: ${email}` : ''}. Ya podés volver a LIGUX.</p>`)
   } catch (err) {
     res.status(400).send(String(err.message || err))
+  }
+})
+
+app.post('/api/google/finish', async (req, res) => {
+  try {
+    const code = String(req.body?.code || '')
+    if (!code) return res.status(400).json({ error: 'Falta code' })
+    const redirect = req.body?.redirectUri || pendingGoogleRedirect || phoneAuthRedirect()
+    const { email } = await completeGoogle(code, redirect)
+    res.json({ ok: true, email, google: googleStatus(root), sheets: sheetsCache })
+  } catch (err) {
+    res.status(400).json({ error: String(err.message || err) })
   }
 })
 
@@ -143,7 +175,7 @@ app.post('/api/report', async (req, res) => {
   thread = thread.slice(-200)
   saveJson(threadPath, thread)
   const md = [
-    '# Reportador',
+    '# LIGUX',
     `- fecha: ${new Date(msg.at).toISOString()}`,
     `- version: ${msg.version}`,
     '',
@@ -192,7 +224,7 @@ app.post('/api/agent-note', (req, res) => {
   thread = thread.slice(-200)
   saveJson(threadPath, thread)
   broadcast({ type: 'thread', thread })
-  notifyWindows('Reportador', body)
+  notifyWindows('LIGUX', body)
   res.json({ ok: true })
 })
 
@@ -247,7 +279,7 @@ $texts = $xml.GetElementsByTagName('text')
 $texts.Item(0).AppendChild($xml.CreateTextNode('${t}')) | Out-Null
 $texts.Item(1).AppendChild($xml.CreateTextNode('${m}')) | Out-Null
 $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
-[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Reportador').Show($toast)
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('LIGUX').Show($toast)
 `
     spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', script], {
       windowsHide: true,
@@ -261,7 +293,7 @@ $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
 
 wss.on('connection', (ws) => {
   clients.add(ws)
-  ws.send(JSON.stringify({ type: 'hello', watcher, thread, sheets: sheetsCache, google: googleStatus(root) }))
+  ws.send(JSON.stringify({ type: 'hello', watcher, thread, sheets: sheetsCache, google: googleStatus(root), version: appVersion() }))
   ws.on('close', () => clients.delete(ws))
 })
 
@@ -274,6 +306,23 @@ setInterval(() => {
   }
 }, 4000)
 
+function kickGoogleBootstrap() {
+  // No abrir Chrome ni Google solo. Si hace falta la cuenta de Sheets, se hace a mano.
+  return
+}
+
+async function hydrateSheets() {
+  try {
+    if (!googleStatus(root).ok) return
+    sheetsCache = await listSheets(root, localRedirect(PORT))
+    broadcast({ type: 'sheets', sheets: sheetsCache, google: googleStatus(root) })
+  } catch (err) {
+    console.error('hydrateSheets', err.message || err)
+  }
+}
+
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Reportador v${appVersion()} → http://127.0.0.1:${PORT}`)
+  console.log(`LIGUX v${appVersion()} → http://127.0.0.1:${PORT}`)
+  kickGoogleBootstrap()
+  void hydrateSheets()
 })

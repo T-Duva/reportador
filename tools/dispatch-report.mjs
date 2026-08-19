@@ -6,7 +6,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -148,26 +148,47 @@ if (!apiKey) {
   clearWorking()
   markRetry('Sin CURSOR_API_KEY')
   log('Sin CURSOR_API_KEY')
-  notifyPhone('Reportador', 'Falta API key en la PC; reintento cuando esté.')
+  notifyPhone('LIGUX', 'Falta API key en la PC; reintento cuando esté.')
   beat('online')
   process.exit(2)
 }
 
-const prompt = `Sos el agente automático de Reportador. El usuario mandó un mensaje desde el sello REPORTADOR en el celular.
+const {
+  VERSION_NORMS,
+  snapshotVersions,
+  srcFingerprint,
+  ensurePatchIfCodeChanged,
+  withVersionAnnounce,
+  versionsNowLine,
+} = await import(pathToFileURL('E:\\escuchadores-bot\\tools\\app-version.mjs').href)
+const { brainBlock } = await import(pathToFileURL('E:\\escuchadores-bot\\tools\\agent-brain.mjs').href)
+const { fullAgentOpts } = await import(pathToFileURL('E:\\escuchadores-bot\\tools\\agent-power.mjs').href)
+const APP_ID = 'reportador'
+const beforeSnap = snapshotVersions([APP_ID])
+const beforeFp = { [APP_ID]: srcFingerprint(root) }
+const verNow = versionsNowLine([APP_ID])
+
+const prompt = `Sos el agente automático de LIGUX (antes Reportador). El usuario mandó un mensaje desde el sello LIGUX en el celular.
+Si el pedido dice que Tomás ya confirmó, hacelo ya: no preguntes si arrancar.
+${brainBlock()}
 TENÉS QUE HACER EL CAMBIO EN EL CÓDIGO o en las hojas de Google si pidió datos. No digas "listo" sin hacer el trabajo.
 
 Repo: ${root}
 Carpeta de Drive (todas las Sheets, con subcarpetas): 1Z8IMco9DIN3pREbzaffgaIMpEV9iAOV-
+Versión ahora: ${verNow || 'desconocida'}.
+${VERSION_NORMS}
 Pedido (inbox/${id}.md):
 ---
 ${text}
 ---
 
+Nunca abras Chrome, el navegador ni Google Cloud en la PC. Tomás no dio permiso. Todo se hace desde el celular.
+
 Obligatorio:
 1. Leé el pedido y aplicá el fix mínimo en src/ o server/ o tools/, o indicá qué hoja hay que tocar.
-2. Si tocaste frontend: corré npm run build.
+2. Si tocaste frontend: primero subí la versión, después corré npm run build.
 3. No inventes que ya estaba hecho: verificá el código actual.
-4. Al final, en 1-3 oraciones en español, explicá qué hiciste (eso se lee en el chat de la app).
+4. Al final, en 1-3 oraciones en español, explicá qué hiciste y a qué versión actualizaste (eso se lee en el chat). Nunca respondas solo "listo", "recibido", "andando" u "ok".
 `
 
 async function main() {
@@ -178,22 +199,20 @@ async function main() {
   try {
     log('Agent.prompt…', `model=${modelId}`)
     const result = await Promise.race([
-      Agent.prompt(prompt, {
-        apiKey,
-        model: { id: modelId },
-        local: { cwd: root },
-      }),
+      Agent.prompt(prompt, fullAgentOpts({ apiKey, cwd: root, modelId })),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error(`Timeout del agente (${Math.round(timeoutMs / 60000)} min)`)), timeoutMs),
       ),
     ])
-    const summary =
+    const summaryRaw =
       typeof result === 'string'
         ? result
         : String(result?.result || result?.text || result?.message || errText(result?.error) || JSON.stringify(result)).slice(
             0,
             1500,
           )
+    ensurePatchIfCodeChanged([APP_ID], beforeSnap, beforeFp)
+    const summary = withVersionAnnounce(summaryRaw, beforeSnap, snapshotVersions([APP_ID]))
     log('status', result?.status || typeof result)
     log('summary', summary.slice(0, 500))
     fs.writeFileSync(path.join(inbox, `RESULT.${id}.txt`), summary, 'utf8')
@@ -206,7 +225,7 @@ async function main() {
       const msg = isUsageLimit(why)
         ? 'Sin cupo del modelo; reintento con Auto.'
         : `Falló, reintento: ${why.slice(0, 200)}`
-      notifyPhone('Reportador · reintento', msg)
+      notifyPhone('LIGUX · reintento', msg)
       log('requeue', why.slice(0, 200))
       process.exit(2)
     }
@@ -217,7 +236,7 @@ async function main() {
       fs.unlinkSync(path.join(inbox, `RETRY.${id}`))
     } catch {}
     beat('done', countWaiting())
-    notifyPhone('Reportador · hecho', summary.slice(0, 1200) || 'Listo')
+    notifyPhone('LIGUX · hecho', summary.slice(0, 1200) || 'Listo')
     log('done')
     process.exit(0)
   } catch (err) {
@@ -227,7 +246,7 @@ async function main() {
     markRetry(why)
     beat('online')
     notifyPhone(
-      'Reportador · reintento',
+      'LIGUX · reintento',
       isUsageLimit(why) ? 'Sin cupo; reintento automático.' : `Error, reintento: ${why.slice(0, 200)}`,
     )
     process.exit(err instanceof CursorAgentError ? 1 : 2)

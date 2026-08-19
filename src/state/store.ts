@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { APP_VERSION } from '../version'
 import { apiUrl, resolveServerOrigin } from '../lib/server'
+import { openGoogleOnPhone } from '../lib/phoneOpen'
 import type { ChatMsg, SheetFile, SheetGrid, WatcherState } from '../types'
 
 type GoogleState = { ok: boolean; email?: string; error?: string }
@@ -26,6 +27,26 @@ type Store = {
 }
 
 let ws: WebSocket | null = null
+let connecting = false
+
+function mergeThread(local: ChatMsg[], incoming?: ChatMsg[] | null): ChatMsg[] {
+  const map = new Map<string, ChatMsg>()
+  for (const m of local) map.set(m.id, m)
+  for (const m of incoming || []) {
+    if (m?.id) map.set(m.id, m)
+  }
+  return [...map.values()].sort((a, b) => a.at - b.at)
+}
+
+function applyPayload(set: (p: Partial<Store>) => void, get: () => Store, b: Record<string, unknown>) {
+  const next: Partial<Store> = {}
+  if (Array.isArray(b.thread)) next.thread = mergeThread(get().thread, b.thread as ChatMsg[])
+  if (Array.isArray(b.sheets)) next.sheets = b.sheets as SheetFile[]
+  if (b.google) next.google = b.google as GoogleState
+  if (b.watcher) next.watcher = b.watcher as WatcherState
+  if (typeof b.version === 'string') next.remoteVersion = b.version
+  if (Object.keys(next).length) set(next)
+}
 
 export const useApp = create<Store>((set, get) => ({
   connected: false,
@@ -41,57 +62,66 @@ export const useApp = create<Store>((set, get) => ({
   setChatOpen: (v) => set({ chatOpen: v }),
 
   connect: () => {
+    if (connecting) return
+    connecting = true
     void (async () => {
-      const origin = await resolveServerOrigin()
-      const health = await fetch(`${origin}/api/health?t=${Date.now()}`, { cache: 'no-store' })
-      const h = (await health.json()) as { version?: string; watcher?: WatcherState }
-      set({
-        remoteVersion: h.version || null,
-        watcher: h.watcher || get().watcher,
-        connected: true,
-      })
-      const boot = await fetch(`${origin}/api/boot?t=${Date.now()}`, { cache: 'no-store' })
-      const b = (await boot.json()) as {
-        thread?: ChatMsg[]
-        sheets?: SheetFile[]
-        google?: GoogleState
-        watcher?: WatcherState
-      }
-      set({
-        thread: b.thread || [],
-        sheets: b.sheets || [],
-        google: b.google || { ok: false },
-        watcher: b.watcher || get().watcher,
-      })
-      const wsUrl = origin.replace(/^http/, 'ws') + '/ws'
       try {
-        ws?.close()
-      } catch {
-        /* ok */
-      }
-      ws = new WebSocket(wsUrl)
-      ws.onmessage = (ev) => {
-        try {
-          const msg = JSON.parse(String(ev.data)) as Record<string, unknown>
-          if (msg.type === 'watcher' && msg.watcher) set({ watcher: msg.watcher as WatcherState })
-          if (msg.type === 'thread' && Array.isArray(msg.thread)) set({ thread: msg.thread as ChatMsg[] })
-          if (msg.type === 'sheets' && Array.isArray(msg.sheets)) set({ sheets: msg.sheets as SheetFile[] })
-          if (msg.type === 'google' && msg.google) set({ google: msg.google as GoogleState })
-        } catch {
-          /* ignore */
+        const origin = await resolveServerOrigin()
+        const boot = await fetch(`${origin}/api/boot?t=${Date.now()}`, { cache: 'no-store' })
+        const b = (await boot.json()) as Record<string, unknown>
+        applyPayload(set, get, b)
+        set({ connected: true, remoteVersion: (b.version as string) || get().remoteVersion })
+
+        if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+          return
         }
+        const wsUrl = origin.replace(/^http/, 'ws') + '/ws'
+        ws = new WebSocket(wsUrl)
+        ws.onmessage = (ev) => {
+          try {
+            const msg = JSON.parse(String(ev.data)) as Record<string, unknown>
+            applyPayload(set, get, msg)
+          } catch {
+            /* ignore */
+          }
+        }
+        ws.onopen = () => set({ connected: true })
+        ws.onclose = () => {
+          set({ connected: false })
+          ws = null
+        }
+      } catch {
+        set({ connected: false })
+      } finally {
+        connecting = false
       }
-      ws.onclose = () => set({ connected: false })
-    })().catch(() => set({ connected: false }))
+    })()
   },
 
   sendChat: async (text, photos) => {
+    const tempId = `local-${Date.now()}`
+    const local: ChatMsg = {
+      id: tempId,
+      role: 'user',
+      text,
+      photos,
+      at: Date.now(),
+      version: APP_VERSION,
+    }
+    set({ thread: mergeThread(get().thread, [local]) })
     const url = await apiUrl('/api/report')
-    await fetch(url, {
+    const r = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text, photos, version: APP_VERSION }),
     })
+    const j = (await r.json()) as { ok?: boolean; thread?: ChatMsg[]; error?: string }
+    if (!r.ok) {
+      set({ toast: j.error || 'No se pudo enviar' })
+      return
+    }
+    const withoutTemp = get().thread.filter((m) => m.id !== tempId)
+    set({ thread: mergeThread(withoutTemp, j.thread) })
   },
 
   refreshSheets: async () => {
@@ -129,10 +159,54 @@ export const useApp = create<Store>((set, get) => ({
   },
 
   startGoogle: async () => {
-    const url = await apiUrl('/api/google/start')
-    const r = await fetch(url)
-    const j = (await r.json()) as { url?: string; error?: string }
-    if (j.url) window.open(j.url, '_blank')
-    else set({ toast: j.error || 'No se pudo abrir Google' })
+    set({ toast: 'Abriendo Google en el celu…' })
+    try {
+      const url = await apiUrl('/api/google/start')
+      const r = await fetch(url, { cache: 'no-store' })
+      const raw = await r.text()
+      let j: { url?: string; error?: string }
+      try {
+        j = JSON.parse(raw) as { url?: string; error?: string }
+      } catch {
+        set({ toast: 'No llegué al servidor. Tocá Vincular de nuevo.' })
+        return
+      }
+      if (j.url) {
+        const auth = await openGoogleOnPhone(j.url)
+        const finish = await apiUrl('/api/google/finish')
+        const fr = await fetch(finish, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ code: auth.code, redirectUri: auth.redirectUri }),
+        })
+        const finishRaw = await fr.text()
+        let fj: { ok?: boolean; error?: string; google?: GoogleState; sheets?: SheetFile[] }
+        try {
+          fj = JSON.parse(finishRaw) as {
+            ok?: boolean
+            error?: string
+            google?: GoogleState
+            sheets?: SheetFile[]
+          }
+        } catch {
+          set({ toast: 'Google contestó mal. Tocá Vincular de nuevo.' })
+          return
+        }
+        if (!fr.ok || fj.error) {
+          set({ toast: fj.error || 'Google no autorizó Drive' })
+          return
+        }
+        set({
+          google: fj.google || { ok: true },
+          sheets: fj.sheets || get().sheets,
+          toast: null,
+        })
+        await get().refreshSheets()
+        return
+      }
+      set({ toast: j.error || 'No se pudo vincular Drive' })
+    } catch (err) {
+      set({ toast: String((err as Error).message || err) })
+    }
   },
 }))
