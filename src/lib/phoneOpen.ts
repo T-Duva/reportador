@@ -33,12 +33,17 @@ export async function openOnPhone(url: string): Promise<void> {
   }
 }
 
-export async function installApkOnPhone(url: string): Promise<void> {
+export async function installApkOnPhone(
+  url: string,
+  opts: { allowBrowserFallback?: boolean } = {},
+): Promise<void> {
+  const allowBrowser = opts.allowBrowserFallback !== false
   if (Capacitor.isNativePlatform()) {
     try {
       await PhoneOpen.installApk({ url })
       return
-    } catch {
+    } catch (e) {
+      if (!allowBrowser) throw e
       await openOnPhone(url)
     }
     return

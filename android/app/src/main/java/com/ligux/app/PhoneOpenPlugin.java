@@ -160,14 +160,8 @@ public class PhoneOpenPlugin extends Plugin {
                 getContext().startActivity(intent);
                 call.resolve();
             } catch (Exception e) {
-                try {
-                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    getContext().startActivity(intent);
-                    call.resolve();
-                } catch (Exception e2) {
-                    call.reject(String.valueOf(e.getMessage()));
-                }
+                // No abrir el navegador: eso descarga el APK otra vez.
+                call.reject(String.valueOf(e.getMessage()));
             }
         }).start();
     }

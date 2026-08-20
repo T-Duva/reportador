@@ -48,6 +48,7 @@ export default function App() {
   const [text, setText] = useState('')
   const [photos, setPhotos] = useState<string[]>([])
   const [cell, setCell] = useState({ row: 1, col: 0, value: '' })
+  const [updateBusy, setUpdateBusy] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const lamp = LAMP[watcher.status] || LAMP.off
   const folders = groupByPath(sheets)
@@ -234,8 +235,16 @@ export default function App() {
       {needsUpdate && remoteVersion ? (
         <div className="update-ribbon">
           <span>hay v{remoteVersion} (tenés v{APP_VERSION})</span>
-          <button type="button" onClick={() => void applyAppUpdate(remoteVersion)}>
-            Instalar
+          <button
+            type="button"
+            disabled={updateBusy}
+            onClick={() => {
+              if (updateBusy) return
+              setUpdateBusy(true)
+              void applyAppUpdate(remoteVersion).finally(() => setUpdateBusy(false))
+            }}
+          >
+            {updateBusy ? 'bajando…' : 'Instalar'}
           </button>
         </div>
       ) : null}
