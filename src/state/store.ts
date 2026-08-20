@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { APP_VERSION } from '../version'
 import { apiUrl, clearServerCache, resolveServerOrigin, serverFetch } from '../lib/server'
 import { fetchRemoteVersion, pickNewer } from '../lib/remoteVersion'
-import { normalizeVersion, clearUpdateSkipIfCaughtUp } from '../lib/update'
+import { clearUpdateSkip, isNewerVersion, normalizeVersion } from '../lib/update'
 import { openGoogleOnPhone, openNativeGoogleOnPhone } from '../lib/phoneOpen'
 import type { AppMenu, ChatMsg, Comparison, SheetFile, SheetGrid, WatcherState } from '../types'
 import { deleteComparison, sendPostChat as apiPostChat, sendPreChat as apiPreChat } from '../lib/analysis'
@@ -95,7 +95,7 @@ export const useApp = create<Store>((set, get) => ({
         applyPayload(set, get, b)
         serverVersion = typeof b.version === 'string' ? normalizeVersion(b.version) : null
         set({ connected: true, remoteVersion: serverVersion || get().remoteVersion })
-        if (serverVersion) clearUpdateSkipIfCaughtUp(serverVersion, APP_VERSION)
+        if (serverVersion && !isNewerVersion(serverVersion, APP_VERSION)) clearUpdateSkip()
 
         if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
           /* seguir abajo por version remota */
@@ -125,7 +125,7 @@ export const useApp = create<Store>((set, get) => ({
         const best = pickNewer(pickNewer(serverVersion, gh), get().remoteVersion)
         if (best) {
           set({ remoteVersion: normalizeVersion(best) })
-          clearUpdateSkipIfCaughtUp(best, APP_VERSION)
+          if (!isNewerVersion(best, APP_VERSION)) clearUpdateSkip()
         }
       }
     })()
