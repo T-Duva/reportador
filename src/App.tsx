@@ -3,16 +3,8 @@ import { applyAppUpdate } from './nativeBoot'
 import { needsAppUpdate } from './lib/update'
 import { useApp } from './state/store'
 import { APP_NAME, APP_VERSION } from './version'
-import type { WatcherStatus } from './types'
 import { AnalysisChat } from './components/AnalysisChat'
 import { ComparisonCard } from './components/ComparisonCard'
-
-const LAMP: Record<WatcherStatus, { cls: string; text: string }> = {
-  online: { cls: 'on', text: 'escuchando' },
-  working: { cls: 'working', text: 'laburando' },
-  stuck: { cls: 'stuck', text: 'trabado' },
-  off: { cls: 'off', text: 'apagado' },
-}
 
 const NAV = [
   { id: 'general' as const, label: 'General' },
@@ -22,7 +14,7 @@ const NAV = [
 
 export default function App() {
   const connect = useApp((s) => s.connect)
-  const watcher = useApp((s) => s.watcher)
+  const connected = useApp((s) => s.connected)
   const sheets = useApp((s) => s.sheets)
   const google = useApp((s) => s.google)
   const menu = useApp((s) => s.menu)
@@ -50,7 +42,6 @@ export default function App() {
   const [cell, setCell] = useState({ row: 1, col: 0, value: '' })
   const [updateBusy, setUpdateBusy] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
-  const lamp = LAMP[watcher.status] || LAMP.off
   const folders = groupByPath(sheets)
   const needsUpdate = needsAppUpdate(remoteVersion, APP_VERSION)
   const currentTab = openSheet?.tabs[tab]
@@ -84,7 +75,6 @@ export default function App() {
   return (
     <div className="desk">
       <header className="masthead">
-        <div className="edition">edición de campo · no es once</div>
         <img className="brand-icon" src={`/icons/icon-192.png?v=${APP_VERSION}`} width={56} height={56} alt="" />
         {menu === 'general' ? (
           <button type="button" className="stamp" onClick={() => setChatOpen(true)}>
@@ -94,9 +84,9 @@ export default function App() {
           <div className="stamp stamp-static">{menu === 'pre' ? 'PRE-ANÁLISIS' : 'POST-ANÁLISIS'}</div>
         )}
         <div className="lamp-row">
-          <span className={`lamp ${lamp.cls}`} />
-          <span className="lamp-label">{lamp.text}</span>
-          <span className="ver">v{APP_VERSION}</span>
+          <span className={`lamp ${connected ? 'on' : 'off'}`} />
+          <span className="lamp-label">{connected ? 'Online' : 'Offline'}</span>
+          <span className="ver">{APP_VERSION}</span>
         </div>
       </header>
 
@@ -334,7 +324,7 @@ function GeneralView({
             <h2>{path}</h2>
             {files.map((f) => (
               <button key={f.id} type="button" className="sheet-card" onClick={() => void loadSheet(f.id)}>
-                <strong>{f.name}</strong>
+                <strong title={f.name}>{shortDriveName(f.name)}</strong>
                 <span>{f.modified ? new Date(f.modified).toLocaleString('es-AR') : 'hoja'}</span>
               </button>
             ))}
@@ -353,6 +343,12 @@ function GeneralView({
       ) : null}
     </>
   )
+}
+
+function shortDriveName(name: string, max = 42): string {
+  const n = String(name || '').trim()
+  if (n.length <= max) return n
+  return `${n.slice(0, max - 1)}…`
 }
 
 function groupByPath(files: { id: string; name: string; path: string; modified?: string | null }[]) {
